@@ -1,0 +1,43 @@
+# Swift Build Artifacts
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+
+# macOS
+.DS_Store
+*.app
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.xcuserstate
+
+# Swift Package Manager
+Packages/
+Package.resolved
+
+# Build directories
+build/
+dist/
+
+# User data (don't commit personal memory files)
+.background-ai-agent/
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.swp
+*.swo
+*~
+.*.sw?

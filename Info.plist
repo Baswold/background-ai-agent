@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Background AI Agent</string>
+    <key>CFBundleExecutable</key>
+    <string>BackgroundAIAgent</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.backgroundai.agent</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Background AI Agent</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+
+    <!-- THIS IS KEY: Hide from Dock and Cmd+Tab -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- App Category -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+
+    <!-- Permissions Usage Descriptions -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Background AI Agent needs screen recording permission to analyze your work and provide intelligent assistance.</string>
+
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Background AI Agent needs accessibility permission to monitor apps and provide smart assistance.</string>
+
+    <key>NSUserNotificationUsageDescription</key>
+    <string>Background AI Agent sends notifications when it finds ways to help improve your work.</string>
+
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Background AI Agent uses Apple Events to interact with applications and provide assistance.</string>
+
+    <!-- High Resolution Support -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Support Dark Mode -->
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+</dict>
+</plist>
