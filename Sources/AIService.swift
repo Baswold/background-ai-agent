@@ -6,15 +6,30 @@ class AIService {
 
     private let apiKey: String
     private let session: URLSession
+    private let maxRetries = 3
 
     private init() {
         self.apiKey = Settings.shared.claudeAPIKey
-        self.session = URLSession.shared
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 300
+        self.session = URLSession(configuration: config)
+
+        Logger.shared.info("AI Service initialized", category: .ai)
     }
 
-    // MARK: - Real AI Analysis
+    // MARK: - Real AI Analysis with Caching & Rate Limiting
 
     func analyzeCode(_ code: String, language: String = "swift") async throws -> CodeAnalysis {
+        Logger.shared.debug("Analyzing \(language) code (\(code.count) chars)", category: .ai)
+
+        // Check cache first
+        if let cached = await CacheManager.shared.getCachedCodeAnalysis(code: code, language: language) {
+            Logger.shared.info("Using cached code analysis", category: .performance)
+            return cached
+        }
+
         let prompt = """
         Analyze this \(language) code and identify:
         1. Bugs or potential issues
@@ -35,8 +50,16 @@ class AIService {
         }
         """
 
-        let response = try await callClaude(prompt: prompt)
-        return try parseCodeAnalysis(response)
+        let analysis = try await Logger.shared.measurePerformanceAsync("Code Analysis", category: .performance) {
+            let response = try await callClaudeWithRetry(prompt: prompt)
+            return try parseCodeAnalysis(response)
+        }
+
+        // Cache the result
+        await CacheManager.shared.cacheCodeAnalysis(code: code, language: language, analysis: analysis)
+
+        Logger.shared.info("Code analysis complete: found \(analysis.issues.count) issues", category: .ai)
+        return analysis
     }
 
     func analyzeScreenshot(_ image: NSImage, context: String) async throws -> ScreenshotAnalysis {
@@ -134,14 +157,46 @@ class AIService {
         return json
     }
 
-    // MARK: - Claude API Integration
+    // MARK: - Claude API Integration with Retry Logic
+
+    private func callClaudeWithRetry(prompt: String, maxTokens: Int = 2048, attemptNumber: Int = 0) async throws -> String {
+        do {
+            return try await callClaude(prompt: prompt, maxTokens: maxTokens)
+        } catch {
+            Logger.shared.warning("Claude API call failed (attempt \(attemptNumber + 1)/\(maxRetries)): \(error)", category: .ai)
+
+            // Check if we should retry
+            guard attemptNumber < maxRetries - 1 else {
+                Logger.shared.error("Max retries exceeded for Claude API", category: .errorHandling)
+                throw error
+            }
+
+            // Calculate backoff delay
+            let baseDelay: TimeInterval = 2.0
+            let delay = min(baseDelay * pow(2.0, Double(attemptNumber)), 60.0)
+            let jitter = Double.random(in: 0...0.3) * delay
+
+            Logger.shared.info("Retrying in \(String(format: "%.1f", delay + jitter))s...", category: .ai)
+
+            try await Task.sleep(nanoseconds: UInt64((delay + jitter) * 1_000_000_000))
+
+            return try await callClaudeWithRetry(prompt: prompt, maxTokens: maxTokens, attemptNumber: attemptNumber + 1)
+        }
+    }
 
     private func callClaude(prompt: String, maxTokens: Int = 2048) async throws -> String {
         guard !apiKey.isEmpty else {
-            throw AIError.missingAPIKey
+            Logger.shared.error("Claude API key not configured", category: .ai)
+            throw AppError.apiKeyMissing(service: "Claude")
         }
 
-        let url = URL(string: AppConfig.claudeAPIURL)!
+        // Apply rate limiting
+        try await RateLimiter.shared.waitForAvailability(for: "claude")
+
+        guard let url = URL(string: AppConfig.claudeAPIURL) else {
+            throw AppError.invalidURL(url: AppConfig.claudeAPIURL)
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -156,26 +211,48 @@ class AIService {
             ]
         ]
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw AppError.serializationError(type: "API Request", underlying: error)
+        }
+
+        Logger.shared.verbose("Calling Claude API (model: \(AppConfig.claudeModel), tokens: \(maxTokens))", category: .ai)
 
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIError.networkError
+            throw AppError.networkUnavailable
+        }
+
+        // Handle rate limiting
+        if httpResponse.statusCode == 429 {
+            let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                .flatMap { TimeInterval($0) }
+
+            Logger.shared.warning("Claude API rate limit hit", category: .ai)
+            throw AppError.apiRateLimitExceeded(service: "Claude", retryAfter: retryAfter)
         }
 
         guard httpResponse.statusCode == 200 else {
-            let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-            print("❌ Claude API error: \(error)")
-            throw AIError.apiError(statusCode: httpResponse.statusCode, message: error)
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            Logger.shared.error("Claude API error \(httpResponse.statusCode): \(errorMessage)", category: .ai)
+
+            if httpResponse.statusCode >= 500 {
+                throw AppError.httpError(statusCode: httpResponse.statusCode, message: "Server error")
+            } else {
+                throw AppError.invalidAPIResponse(service: "Claude", details: errorMessage)
+            }
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = json["content"] as? [[String: Any]],
               let text = content.first?["text"] as? String else {
-            throw AIError.invalidResponse
+            Logger.shared.error("Failed to parse Claude API response", category: .ai)
+            throw AppError.invalidAPIResponse(service: "Claude", details: "Invalid response format")
         }
 
+        Logger.shared.verbose("Claude API call successful (\(text.count) chars)", category: .ai)
         return text
     }
 
