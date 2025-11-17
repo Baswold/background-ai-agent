@@ -7,16 +7,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var menuBarView: MenuBarView?
     var popover: NSPopover?
-    var agentEngine: AgentEngine?
+    var agentEngine: EnhancedAgentEngine?
     var isEnabled: Bool = true {
         didSet {
-            UserDefaults.standard.set(isEnabled, forKey: "agentEnabled")
+            Settings.shared.isEnabled = isEnabled
             agentEngine?.setEnabled(isEnabled)
         }
     }
 
+    // Additional powerful tools
+    private var clipboardMonitor: ClipboardMonitor?
+    private var productivityTracker: ProductivityTracker?
+    private var smartReminders: SmartReminders?
+    private var terminalMonitor: TerminalMonitor?
+    private var networkMonitor: NetworkMonitor?
+    private var snippetManager: CodeSnippetManager?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        print("🚀 Background AI Agent starting up...")
+        print("🚀 Enhanced Background AI Agent starting up...")
+        print("🎯 Loading MASSIVE feature set...")
+
+        // Initialize configuration
+        AppConfig.initialize()
 
         // Request permissions
         requestPermissions()
@@ -24,21 +36,85 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup menu bar
         setupMenuBar()
 
-        // Initialize the AI agent engine
-        agentEngine = AgentEngine()
+        // Initialize the ENHANCED AI agent engine
+        agentEngine = EnhancedAgentEngine()
+
+        // Initialize all the powerful tools
+        initializeAdvancedTools()
+
+        // Setup keyboard shortcuts
+        KeyboardShortcuts.shared.registerDefaultShortcuts(delegate: self)
 
         // Load saved state
-        isEnabled = UserDefaults.standard.bool(forKey: "agentEnabled")
-        if !UserDefaults.standard.object(forKey: "agentEnabled") != nil {
-            isEnabled = true // Default to enabled on first launch
-        }
+        isEnabled = Settings.shared.isEnabled
 
         // Start monitoring if enabled
         if isEnabled {
-            agentEngine?.start()
+            startAllSystems()
         }
 
-        print("✅ Background AI Agent ready!")
+        print("✨ Enhanced Background AI Agent READY!")
+        print("📊 Features loaded:")
+        print("  ✅ Real AI Analysis (Claude API)")
+        print("  ✅ File System Watching")
+        print("  ✅ GitHub Integration")
+        print("  ✅ OCR Text Extraction")
+        print("  ✅ Form Automation")
+        print("  ✅ Clipboard Monitoring")
+        print("  ✅ Productivity Tracking")
+        print("  ✅ Smart Reminders")
+        print("  ✅ Terminal Monitoring")
+        print("  ✅ Network Monitoring")
+        print("  ✅ Code Snippet Manager")
+        print("  ✅ Auto Documentation")
+        print("  ✅ Keyboard Shortcuts")
+        print("  🎉 AND MORE!")
+    }
+
+    private func initializeAdvancedTools() {
+        clipboardMonitor = ClipboardMonitor()
+        productivityTracker = ProductivityTracker()
+        smartReminders = SmartReminders()
+        terminalMonitor = TerminalMonitor()
+        networkMonitor = NetworkMonitor()
+        snippetManager = CodeSnippetManager()
+
+        print("🛠️ Advanced tools initialized")
+    }
+
+    private func startAllSystems() {
+        // Start main engine
+        agentEngine?.start()
+
+        // Start clipboard monitoring
+        clipboardMonitor?.start { [weak self] activity in
+            self?.handleActivity(activity)
+        }
+
+        // Start productivity tracking
+        productivityTracker?.start()
+
+        // Start smart reminders
+        smartReminders?.start { [weak self] activity in
+            self?.handleActivity(activity)
+        }
+
+        // Start terminal monitoring
+        terminalMonitor?.start { [weak self] activity in
+            self?.handleActivity(activity)
+        }
+
+        // Start network monitoring
+        networkMonitor?.start { [weak self] activity in
+            self?.handleActivity(activity)
+        }
+
+        print("🚀 All systems operational!")
+    }
+
+    private func handleActivity(_ activity: Activity) {
+        // Additional activity handling could go here
+        print("📝 Activity logged: \(activity.title)")
     }
 
     func setupMenuBar() {
@@ -124,5 +200,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
             }
         }
+    }
+
+    // Public access for keyboard shortcuts
+    func getProductivityReport() -> ProductivityReport? {
+        return productivityTracker?.getProductivityReport()
+    }
+
+    func getCodeSnippets() -> [CodeSnippet] {
+        return snippetManager?.getTopSnippets() ?? []
     }
 }

@@ -4,71 +4,74 @@ import AppKit
 import ScreenCaptureKit
 import UserNotifications
 
-class AgentEngine: NSObject {
+class EnhancedAgentEngine: NSObject {
     private var isEnabled = true
     private var recentActivities: [Activity] = []
     private var workspace: NSWorkspace
     private var appObserver: NSObjectProtocol?
-    private var memoryManager: MemoryManager
-    private var screenshotCaptureEngine: ScreenshotCaptureEngine
-    private var vsCodeMonitor: VSCodeMonitor
-    private var browserMonitor: BrowserMonitor
+
+    // Enhanced components
+    private var screenshotEngine: ScreenshotCaptureEngine
+    private var codeFileMonitor: CodeFileMonitor
     private var githubMonitor: GitHubMonitor
+    private var memoryDB: MemoryDatabase
 
     override init() {
         self.workspace = NSWorkspace.shared
-        self.memoryManager = MemoryManager()
-        self.screenshotCaptureEngine = ScreenshotCaptureEngine()
-        self.vsCodeMonitor = VSCodeMonitor()
-        self.browserMonitor = BrowserMonitor()
+        self.screenshotEngine = ScreenshotCaptureEngine()
+        self.codeFileMonitor = CodeFileMonitor()
         self.githubMonitor = GitHubMonitor()
+        self.memoryDB = MemoryDatabase()
 
         super.init()
 
+        // Initialize
+        AppConfig.initialize()
         setupNotificationObservers()
     }
 
     func start() {
         guard isEnabled else { return }
 
-        print("🧠 Agent Engine starting...")
+        print("🚀 Enhanced Agent Engine starting...")
+        print("🔑 Claude API: \(Settings.shared.claudeAPIKey.isEmpty ? "❌ Not configured" : "✅ Ready")")
+        print("🐙 GitHub Token: \(Settings.shared.githubToken.isEmpty ? "❌ Not configured" : "✅ Ready")")
 
-        // Start monitoring app activations
+        // Start app monitoring
         startAppMonitoring()
 
-        // Start VS Code monitoring
-        vsCodeMonitor.start { [weak self] activity in
-            self?.addActivity(activity)
-            self?.sendNotification(activity: activity)
-        }
-
-        // Start browser monitoring
-        browserMonitor.start { [weak self] activity in
-            self?.addActivity(activity)
-            self?.sendNotification(activity: activity)
+        // Start file watching
+        if Settings.shared.enableCodeAnalysis {
+            codeFileMonitor.start { [weak self] activity in
+                self?.addActivity(activity)
+                self?.sendNotification(activity: activity)
+            }
         }
 
         // Start GitHub monitoring
-        githubMonitor.start { [weak self] activity in
-            self?.addActivity(activity)
-            self?.sendNotification(activity: activity)
+        if Settings.shared.enableGitHub && !Settings.shared.githubToken.isEmpty {
+            githubMonitor.startRealMonitoring { [weak self] activity in
+                self?.addActivity(activity)
+                self?.sendNotification(activity: activity)
+            }
         }
 
-        memoryManager.logEvent("Agent started monitoring")
+        memoryDB.logEvent("Enhanced agent started - Real AI powered!")
+
+        print("✨ Enhanced Agent Engine ready with REAL AI!")
     }
 
     func stop() {
-        print("🛑 Agent Engine stopping...")
+        print("🛑 Enhanced Agent Engine stopping...")
 
         if let observer = appObserver {
             workspace.notificationCenter.removeObserver(observer)
         }
 
-        vsCodeMonitor.stop()
-        browserMonitor.stop()
+        codeFileMonitor.stop()
         githubMonitor.stop()
 
-        memoryManager.logEvent("Agent stopped monitoring")
+        memoryDB.logEvent("Enhanced agent stopped")
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -81,11 +84,31 @@ class AgentEngine: NSObject {
     }
 
     func getRecentActivities() -> [Activity] {
-        return Array(recentActivities.prefix(20))
+        return Array(recentActivities.prefix(50))
     }
 
+    func captureScreenshotManually() {
+        print("📸 Manual screenshot capture...")
+
+        screenshotEngine.captureFullScreen { [weak self] screenshot in
+            guard let self = self, let screenshot = screenshot else { return }
+
+            self.saveScreenshot(screenshot, appName: "Manual")
+
+            let activity = Activity(
+                title: "Screenshot Captured",
+                description: "Manual screenshot saved",
+                type: .screenshot
+            )
+
+            self.addActivity(activity)
+            self.sendNotification(activity: activity)
+        }
+    }
+
+    // MARK: - Setup
+
     private func setupNotificationObservers() {
-        // Observe app activations
         appObserver = workspace.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -96,150 +119,203 @@ class AgentEngine: NSObject {
     }
 
     private func startAppMonitoring() {
-        print("👀 Starting app monitoring...")
+        print("👀 Starting enhanced app monitoring...")
     }
+
+    // MARK: - App Activation Handling
 
     private func handleAppActivation(_ notification: Notification) {
         guard isEnabled else { return }
+        guard Settings.shared.enableScreenshots else { return }
 
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              let appName = app.localizedName else {
+              let appName = app.localizedName,
+              let bundleId = app.bundleIdentifier else {
             return
         }
 
         print("📱 App activated: \(appName)")
 
-        // Log to memory
-        memoryManager.logEvent("Opened \(appName)")
+        // Log to memory database
+        memoryDB.logEvent("Opened \(appName)")
+        memoryDB.logAppUsage(appName: appName, bundleId: bundleId)
 
-        // Take screenshot after a short delay to let the app open
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.captureAndAnalyzeApp(appName: appName, bundleId: app.bundleIdentifier ?? "")
+        // Delayed capture and analysis
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.captureAndAnalyze(appName: appName, bundleId: bundleId)
         }
     }
 
-    private func captureAndAnalyzeApp(appName: String, bundleId: String) {
-        screenshotCaptureEngine.captureActiveWindow { [weak self] screenshot in
+    // MARK: - Screenshot Capture & Analysis
+
+    private func captureAndAnalyze(appName: String, bundleId: String) {
+        screenshotEngine.captureActiveWindow { [weak self] screenshot in
             guard let self = self, let screenshot = screenshot else { return }
 
             // Save screenshot
             self.saveScreenshot(screenshot, appName: appName)
 
             // Analyze based on app type
-            if bundleId.contains("com.microsoft.VSCode") || bundleId.contains("Xcode") {
-                self.analyzeCodeEditor(screenshot, appName: appName)
-            } else if bundleId.contains("Safari") || bundleId.contains("Chrome") || bundleId.contains("Firefox") {
-                self.analyzeBrowser(screenshot, appName: appName)
+            Task {
+                await self.performIntelligentAnalysis(
+                    screenshot: screenshot,
+                    appName: appName,
+                    bundleId: bundleId
+                )
             }
-
-            let activity = Activity(
-                title: "Captured \(appName)",
-                description: "Screenshot saved and analyzed",
-                type: .screenshot
-            )
-            self.addActivity(activity)
         }
     }
 
-    private func analyzeCodeEditor(_ screenshot: NSImage, appName: String) {
-        // Simulate AI analysis of code
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self = self else { return }
+    private func performIntelligentAnalysis(screenshot: NSImage, appName: String, bundleId: String) async {
+        do {
+            // Extract text using OCR
+            let extractedText = try await OCRService.shared.extractText(from: screenshot)
 
-            // Simulate finding an issue
-            let foundIssue = Int.random(in: 0...100) > 60
+            // Detect if it's code
+            if let detectedCode = try await OCRService.shared.detectCode(from: screenshot) {
+                await analyzeExtractedCode(detectedCode, appName: appName)
+                return
+            }
 
-            if foundIssue {
-                let issues = [
-                    "potential memory leak in loop",
-                    "unused variable declaration",
-                    "missing error handling",
-                    "inefficient algorithm detected",
-                    "missing type annotation"
-                ]
+            // Check for forms
+            if let detectedForm = try await FormAutomation.shared.detectFormInFrontmostApp() {
+                await handleDetectedForm(detectedForm, screenshot: screenshot)
+                return
+            }
 
-                let fixes = [
-                    "Added proper cleanup",
-                    "Removed unused code",
-                    "Added try-catch block",
-                    "Optimized the algorithm",
-                    "Added type definitions"
-                ]
+            // General AI analysis with vision
+            if !Settings.shared.claudeAPIKey.isEmpty {
+                let context = "User is working in \(appName)"
+                let analysis = try await AIService.shared.analyzeScreenshot(screenshot, context: context)
 
-                let issue = issues.randomElement()!
-                let fix = fixes.randomElement()!
+                if !analysis.suggestions.isEmpty {
+                    let activity = Activity(
+                        title: "Insight: \(appName)",
+                        description: analysis.suggestions.first ?? "Analysis complete",
+                        type: .learning
+                    )
+
+                    addActivity(activity)
+                    if Settings.shared.enableNotifications {
+                        sendNotification(activity: activity)
+                    }
+                }
+
+                // Save insights to memory
+                for suggestion in analysis.suggestions {
+                    memoryDB.logInsight(category: appName, insight: suggestion)
+                }
+            }
+
+        } catch {
+            print("❌ Analysis error: \(error)")
+        }
+    }
+
+    private func analyzeExtractedCode(_ code: DetectedCode, appName: String) async {
+        guard !Settings.shared.claudeAPIKey.isEmpty else {
+            print("⚠️ Claude API key not configured - skipping AI analysis")
+            return
+        }
+
+        do {
+            let analysis = try await AIService.shared.analyzeCode(code.text, language: code.language)
+
+            let highPriorityIssues = analysis.issues.filter { $0.severity == "high" }
+
+            if !highPriorityIssues.isEmpty {
+                let issue = highPriorityIssues.first!
 
                 let activity = Activity(
-                    title: "Fixed Code Issue",
-                    description: "Found \(issue). \(fix)!",
+                    title: "Code Issue Detected in \(appName)",
+                    description: "\(issue.type.capitalized): \(issue.description)",
                     type: .vsCodeFix
                 )
 
-                self.addActivity(activity)
-                self.sendNotification(activity: activity)
-                self.memoryManager.logEvent("Fixed: \(issue)")
-            }
-        }
-    }
+                addActivity(activity)
+                sendNotification(activity: activity)
 
-    private func analyzeBrowser(_ screenshot: NSImage, appName: String) {
-        // Simulate AI analysis of browser content
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self = self else { return }
-
-            let detectedForm = Int.random(in: 0...100) > 70
-
-            if detectedForm {
-                let activity = Activity(
-                    title: "Form Detected",
-                    description: "I can help fill out this form automatically!",
-                    type: .formFilled
+                // Save to memory
+                memoryDB.logCodeIssue(
+                    file: appName,
+                    language: code.language,
+                    issueType: issue.type,
+                    description: issue.description,
+                    severity: issue.severity
                 )
-
-                self.addActivity(activity)
-                self.sendNotification(activity: activity)
             }
+
+            print("✅ Code analysis complete: \(analysis.issues.count) issues found")
+
+        } catch {
+            print("❌ Code analysis error: \(error)")
         }
     }
+
+    private func handleDetectedForm(_ form: DetectedForm, screenshot: NSImage) async {
+        let activity = Activity(
+            title: "Form Detected in \(form.appName)",
+            description: "Found \(form.fieldCount) fields. I can help fill it!",
+            type: .formFilled
+        )
+
+        addActivity(activity)
+        sendNotification(activity: activity)
+
+        // Auto-generate form data
+        let formData = await FormAutomation.shared.generateSmartFormData(for: form)
+
+        print("📝 Generated form data for \(form.fieldCount) fields")
+
+        memoryDB.logEvent("Detected form in \(form.appName) with \(form.fieldCount) fields")
+
+        // Could auto-fill here if enabled
+        // try? await FormAutomation.shared.fillForm(fields: formData, in: bundleId)
+    }
+
+    // MARK: - File Management
 
     private func saveScreenshot(_ screenshot: NSImage, appName: String) {
-        let screenshotsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".background-ai-agent")
-            .appendingPathComponent("screenshots")
-
-        try? FileManager.default.createDirectory(at: screenshotsDir, withIntermediateDirectories: true)
-
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let timestamp = formatter.string(from: Date())
 
         let filename = "\(appName)_\(timestamp).png"
-        let filepath = screenshotsDir.appendingPathComponent(filename)
+        let filepath = AppConfig.screenshotsDir.appendingPathComponent(filename)
 
         if let tiffData = screenshot.tiffRepresentation,
            let bitmapImage = NSBitmapImageRep(data: tiffData),
            let pngData = bitmapImage.representation(using: .png, properties: [:]) {
             try? pngData.write(to: filepath)
-            print("📸 Screenshot saved: \(filepath.path)")
+            print("📸 Screenshot saved: \(filepath.lastPathComponent)")
         }
     }
+
+    // MARK: - Activity Management
 
     private func addActivity(_ activity: Activity) {
         DispatchQueue.main.async { [weak self] in
             self?.recentActivities.insert(activity, at: 0)
-            if let count = self?.recentActivities.count, count > 50 {
+            if let count = self?.recentActivities.count, count > 100 {
                 self?.recentActivities.removeLast()
             }
         }
+
+        // Save to database
+        memoryDB.logActivity(activity)
     }
 
     private func sendNotification(activity: Activity) {
+        guard Settings.shared.enableNotifications else { return }
+
         let content = UNMutableNotificationContent()
         content.title = activity.title
         content.body = activity.description
         content.sound = .default
 
-        // Add custom sound and style
+        // Add category for actions
+        content.categoryIdentifier = "AGENT_ACTION"
+
         if #available(macOS 12.0, *) {
             content.interruptionLevel = .timeSensitive
         }
@@ -258,4 +334,131 @@ class AgentEngine: NSObject {
             }
         }
     }
+
+    // MARK: - Analytics
+
+    func getStatistics() -> AgentStatistics {
+        return memoryDB.getStatistics()
+    }
+}
+
+// MARK: - Memory Database
+
+class MemoryDatabase {
+    private let fileURL: URL
+    private let queue = DispatchQueue(label: "com.backgroundai.memorydb", qos: .utility)
+
+    init() {
+        self.fileURL = AppConfig.baseDirectory.appendingPathComponent("memory.md")
+
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            initializeFile()
+        }
+    }
+
+    private func initializeFile() {
+        let content = """
+        # 🧠 Background AI Agent Memory - Enhanced Edition
+
+        **Started**: \(Date().formatted(date: .long, time: .standard))
+        **Mode**: Real AI-Powered Analysis
+
+        ## 🎯 Features Active
+        - ✅ Real Claude AI Integration
+        - ✅ Live File System Watching
+        - ✅ GitHub API Integration
+        - ✅ OCR Text Extraction
+        - ✅ Form Auto-Detection
+        - ✅ Global Keyboard Shortcuts
+
+        ---
+
+        ## 📊 Activity Log
+
+        """
+
+        try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    func logEvent(_ event: String) {
+        queue.async { [weak self] in
+            self?.append("\n### [\(Date().formatted(date: .abbreviated, time: .shortened))] \(event)")
+        }
+    }
+
+    func logActivity(_ activity: Activity) {
+        queue.async { [weak self] in
+            let entry = """
+
+            ### [\(activity.timestamp.formatted(date: .abbreviated, time: .shortened))] \(activity.type.rawValue.uppercased())
+            **\(activity.title)**
+            \(activity.description)
+
+            """
+            self?.append(entry)
+        }
+    }
+
+    func logCodeIssue(file: String, language: String, issueType: String, description: String, severity: String) {
+        let entry = """
+
+        ### Code Issue - \(severity.uppercased())
+        - **File**: \(file)
+        - **Language**: \(language)
+        - **Type**: \(issueType)
+        - **Issue**: \(description)
+
+        """
+        queue.async { [weak self] in
+            self?.append(entry)
+        }
+    }
+
+    func logInsight(category: String, insight: String) {
+        let entry = """
+
+        ### 💡 Insight: \(category)
+        > \(insight)
+
+        """
+        queue.async { [weak self] in
+            self?.append(entry)
+        }
+    }
+
+    func logAppUsage(appName: String, bundleId: String) {
+        // Track app usage patterns
+        queue.async { [weak self] in
+            self?.append("\n- Opened: \(appName)")
+        }
+    }
+
+    private func append(_ text: String) {
+        guard var content = try? String(contentsOf: fileURL, encoding: .utf8) else { return }
+        content += text
+        try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    func getStatistics() -> AgentStatistics {
+        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            return AgentStatistics()
+        }
+
+        let lines = content.components(separatedBy: "\n")
+
+        var stats = AgentStatistics()
+        stats.totalEvents = lines.filter { $0.starts(with: "###") }.count
+        stats.codeIssuesFound = lines.filter { $0.contains("Code Issue") }.count
+        stats.insightsGenerated = lines.filter { $0.contains("💡 Insight") }.count
+
+        return stats
+    }
+}
+
+struct AgentStatistics {
+    var totalEvents: Int = 0
+    var codeIssuesFound: Int = 0
+    var insightsGenerated: Int = 0
+    var screenshotsTaken: Int = 0
+    var formsDetected: Int = 0
 }
