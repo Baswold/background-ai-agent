@@ -124,9 +124,111 @@ class GitHubService {
         return try JSONDecoder().decode([CodeSearchResult].self, from: JSONSerialization.data(withJSONObject: items))
     }
 
+    func getIssues(owner: String, repo: String, state: String = "open") async throws -> [GitHubIssue] {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/repos/\(owner)/\(repo)/issues?state=\(state)")!
+        let data = try await makeRequest(url: url)
+        return try JSONDecoder().decode([GitHubIssue].self, from: data)
+    }
+
+    func createIssue(owner: String, repo: String, title: String, body: String?, labels: [String]? = nil) async throws -> GitHubIssue {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/repos/\(owner)/\(repo)/issues")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("token \(token)", forHTTPHeaderField: "Authorization")
+
+        var requestBody: [String: Any] = ["title": title]
+        if let body = body {
+            requestBody["body"] = body
+        }
+        if let labels = labels {
+            requestBody["labels"] = labels
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 201 else {
+            throw GitHubError.apiError()
+        }
+
+        return try JSONDecoder().decode(GitHubIssue.self, from: data)
+    }
+
+    func getRepositoryStats(owner: String, repo: String) async throws -> GitHubRepoStats {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/repos/\(owner)/\(repo)")!
+        let data = try await makeRequest(url: url)
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw GitHubError.invalidResponse
+        }
+
+        return GitHubRepoStats(
+            stars: json["stargazers_count"] as? Int ?? 0,
+            forks: json["forks_count"] as? Int ?? 0,
+            openIssues: json["open_issues_count"] as? Int ?? 0,
+            watchers: json["watchers_count"] as? Int ?? 0,
+            size: json["size"] as? Int ?? 0,
+            language: json["language"] as? String,
+            updatedAt: json["updated_at"] as? String
+        )
+    }
+
+    func getCommits(owner: String, repo: String, limit: Int = 30) async throws -> [GitHubCommit] {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/repos/\(owner)/\(repo)/commits?per_page=\(limit)")!
+        let data = try await makeRequest(url: url)
+        return try JSONDecoder().decode([GitHubCommit].self, from: data)
+    }
+
+    func getBranches(owner: String, repo: String) async throws -> [GitHubBranch] {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/repos/\(owner)/\(repo)/branches")!
+        let data = try await makeRequest(url: url)
+        return try JSONDecoder().decode([GitHubBranch].self, from: data)
+    }
+
+    func getWorkflowRuns(owner: String, repo: String) async throws -> [GitHubWorkflowRun] {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/repos/\(owner)/\(repo)/actions/runs?per_page=10")!
+        let data = try await makeRequest(url: url)
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let workflowRuns = json["workflow_runs"] as? [[String: Any]] else {
+            return []
+        }
+
+        return try JSONDecoder().decode([GitHubWorkflowRun].self, from: JSONSerialization.data(withJSONObject: workflowRuns))
+    }
+
+    func approvePullRequest(owner: String, repo: String, number: Int, comment: String? = nil) async throws {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/repos/\(owner)/\(repo)/pulls/\(number)/reviews")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("token \(token)", forHTTPHeaderField: "Authorization")
+
+        var body: [String: Any] = ["event": "APPROVE"]
+        if let comment = comment {
+            body["body"] = comment
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw GitHubError.apiError()
+        }
+
+        print("✅ Approved PR #\(number)")
+    }
+
     // MARK: - Helper Methods
 
-    private func makeRequest(url: URL) async throws -> Data {
+    private func makeRequest(url: URL, retryCount: Int = 0) async throws -> Data {
         guard !token.isEmpty else {
             throw GitHubError.missingToken
         }
@@ -134,151 +236,82 @@ class GitHubService {
         var request = URLRequest(url: url)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
         request.addValue("token \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30.0
 
-        let (data, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GitHubError.networkError
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            let error = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw GitHubError.apiError
-        }
-
-        return data
-    }
-}
-
-// MARK: - Enhanced GitHub Monitor
-
-extension GitHubMonitor {
-    func startRealMonitoring(onActivity: @escaping (Activity) -> Void) {
-        activityCallback = onActivity
-
-        guard !Settings.shared.githubToken.isEmpty else {
-            print("⚠️ GitHub token not configured")
-            return
-        }
-
-        print("🐙 Real GitHub monitor starting...")
-
-        // Monitor every 5 minutes
-        timer = Timer.scheduledTimer(withTimeInterval: AppConfig.githubCheckInterval, repeats: true) { [weak self] _ in
-            Task {
-                await self?.checkRealPRs()
-            }
-        }
-
-        // Do initial check
-        Task {
-            await checkRealPRs()
-        }
-    }
-
-    private func checkRealPRs() async {
         do {
-            let repos = try await GitHubService.shared.getRepositories()
+            let (data, response) = try await session.data(for: request)
 
-            for repo in repos.prefix(5) { // Check top 5 active repos
-                guard let owner = repo.owner.login else { continue }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw GitHubError.networkError
+            }
 
-                let prs = try await GitHubService.shared.getPullRequests(owner: owner, repo: repo.name)
-
-                for pr in prs {
-                    await analyzePR(pr, owner: owner, repo: repo.name)
+            // Handle rate limiting
+            if httpResponse.statusCode == 403 {
+                if let rateLimitRemaining = httpResponse.value(forHTTPHeaderField: "X-RateLimit-Remaining"),
+                   rateLimitRemaining == "0" {
+                    if let resetTime = httpResponse.value(forHTTPHeaderField: "X-RateLimit-Reset"),
+                       let resetTimestamp = TimeInterval(resetTime) {
+                        let resetDate = Date(timeIntervalSince1970: resetTimestamp)
+                        let waitTime = resetDate.timeIntervalSinceNow
+                        throw GitHubError.rateLimitExceeded(resetDate: resetDate, waitSeconds: Int(waitTime))
+                    }
                 }
             }
 
+            // Handle other status codes
+            guard httpResponse.statusCode == 200 else {
+                let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+
+                // Retry on 502, 503, 504 errors
+                if (httpResponse.statusCode == 502 || httpResponse.statusCode == 503 || httpResponse.statusCode == 504) && retryCount < 3 {
+                    let backoffDelay = pow(2.0, Double(retryCount)) // Exponential backoff: 1s, 2s, 4s
+                    print("⏱️ Server error \(httpResponse.statusCode), retrying in \(Int(backoffDelay))s (attempt \(retryCount + 1)/3)...")
+                    try await Task.sleep(nanoseconds: UInt64(backoffDelay * 1_000_000_000))
+                    return try await makeRequest(url: url, retryCount: retryCount + 1)
+                }
+
+                throw GitHubError.apiError(statusCode: httpResponse.statusCode, message: errorMessage)
+            }
+
+            return data
+
+        } catch is CancellationError {
+            throw GitHubError.requestCancelled
+        } catch let error as GitHubError {
+            throw error
         } catch {
-            print("❌ GitHub monitoring error: \(error)")
+            // Network errors - retry up to 3 times
+            if retryCount < 3 {
+                let backoffDelay = pow(2.0, Double(retryCount))
+                print("⏱️ Network error, retrying in \(Int(backoffDelay))s (attempt \(retryCount + 1)/3)...")
+                try await Task.sleep(nanoseconds: UInt64(backoffDelay * 1_000_000_000))
+                return try await makeRequest(url: url, retryCount: retryCount + 1)
+            }
+            throw GitHubError.networkError(underlying: error)
         }
     }
 
-    private func analyzePR(_ pr: GitHubPR, owner: String, repo: String) async {
-        let prId = "\(owner)/\(repo)#\(pr.number)"
+    func getRateLimit() async throws -> GitHubRateLimit {
+        let url = URL(string: "\(AppConfig.githubAPIURL)/rate_limit")!
+        let data = try await makeRequest(url: url)
 
-        guard !checkedPRs.contains(prId) else { return }
-        checkedPRs.insert(prId)
-
-        do {
-            // Get diff
-            let diff = try await GitHubService.shared.getPullRequestDiff(owner: owner, repo: repo, number: pr.number)
-
-            // Analyze with AI
-            let analysis = try await AIService.shared.analyzePullRequest(
-                prContent: pr.body ?? "",
-                diff: diff
-            )
-
-            // Report findings
-            let activity = Activity(
-                title: "PR #\(pr.number) Analyzed: \(repo)",
-                description: "Found \(analysis.issues.count) issues. Quality: \(analysis.overallQuality)",
-                type: .githubPR
-            )
-
-            await MainActor.run {
-                self.activityCallback?(activity)
-            }
-
-            // Auto-comment if serious issues found
-            let highSeverityIssues = analysis.issues.filter { $0.severity == "high" }
-            if !highSeverityIssues.isEmpty && Settings.shared.enableGitHub {
-                try await postAnalysisComment(
-                    owner: owner,
-                    repo: repo,
-                    number: pr.number,
-                    analysis: analysis
-                )
-            }
-
-            print("✅ Analyzed PR #\(pr.number) in \(repo)")
-
-        } catch {
-            print("❌ PR analysis error: \(error)")
-        }
-    }
-
-    private func postAnalysisComment(owner: String, repo: String, number: Int, analysis: PRAnalysis) async throws {
-        var comment = "## 🧠 AI Analysis\n\n"
-
-        if !analysis.issues.isEmpty {
-            comment += "### Issues Found\n\n"
-            for issue in analysis.issues.prefix(5) {
-                comment += "- **\(issue.severity.uppercased())**: \(issue.file):\(issue.line) - \(issue.issue)\n"
-            }
-            comment += "\n"
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resources = json["resources"] as? [String: Any],
+              let core = resources["core"] as? [String: Any],
+              let limit = core["limit"] as? Int,
+              let remaining = core["remaining"] as? Int,
+              let reset = core["reset"] as? Int else {
+            throw GitHubError.invalidResponse
         }
 
-        if !analysis.securityConcerns.isEmpty {
-            comment += "### 🔒 Security Concerns\n\n"
-            for concern in analysis.securityConcerns {
-                comment += "- \(concern)\n"
-            }
-            comment += "\n"
-        }
-
-        if !analysis.suggestions.isEmpty {
-            comment += "### 💡 Suggestions\n\n"
-            for suggestion in analysis.suggestions.prefix(3) {
-                comment += "- \(suggestion)\n"
-            }
-            comment += "\n"
-        }
-
-        comment += "\n**Overall Quality**: \(analysis.overallQuality)  \n"
-        comment += "**Recommendation**: \(analysis.recommendation)\n\n"
-        comment += "*Analyzed by Background AI Agent*"
-
-        try await GitHubService.shared.createIssueComment(
-            owner: owner,
-            repo: repo,
-            number: number,
-            body: comment
+        return GitHubRateLimit(
+            limit: limit,
+            remaining: remaining,
+            resetDate: Date(timeIntervalSince1970: TimeInterval(reset))
         )
     }
 }
+
 
 // MARK: - Data Models
 
@@ -345,6 +378,73 @@ struct CodeSearchResult: Codable {
     let repository: GitHubRepo
 }
 
+struct GitHubIssue: Codable {
+    let id: Int
+    let number: Int
+    let title: String
+    let body: String?
+    let state: String
+    let user: GitHubOwner
+    let labels: [GitHubLabel]?
+    let createdAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, number, title, body, state, user, labels
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct GitHubLabel: Codable {
+    let name: String
+    let color: String
+}
+
+struct GitHubRepoStats {
+    let stars: Int
+    let forks: Int
+    let openIssues: Int
+    let watchers: Int
+    let size: Int
+    let language: String?
+    let updatedAt: String?
+}
+
+struct GitHubCommit: Codable {
+    let sha: String
+    let commit: CommitDetail
+
+    struct CommitDetail: Codable {
+        let message: String
+        let author: CommitAuthor
+    }
+
+    struct CommitAuthor: Codable {
+        let name: String
+        let email: String
+        let date: String
+    }
+}
+
+struct GitHubBranch: Codable {
+    let name: String
+    let protected: Bool
+}
+
+struct GitHubWorkflowRun: Codable {
+    let id: Int
+    let name: String
+    let status: String
+    let conclusion: String?
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, status, conclusion
+        case createdAt = "created_at"
+    }
+}
+
 struct ReviewComment {
     let body: String
     let event: String // "COMMENT", "APPROVE", "REQUEST_CHANGES"
@@ -357,9 +457,56 @@ struct LineComment {
     let body: String
 }
 
-enum GitHubError: Error {
+struct GitHubRateLimit {
+    let limit: Int
+    let remaining: Int
+    let resetDate: Date
+
+    var isExceeded: Bool {
+        return remaining == 0
+    }
+
+    var timeUntilReset: TimeInterval {
+        return resetDate.timeIntervalSinceNow
+    }
+
+    var percentRemaining: Double {
+        return Double(remaining) / Double(limit) * 100.0
+    }
+}
+
+enum GitHubError: Error, LocalizedError {
     case missingToken
-    case networkError
-    case apiError
+    case networkError(underlying: Error? = nil)
+    case apiError(statusCode: Int? = nil, message: String? = nil)
     case invalidResponse
+    case rateLimitExceeded(resetDate: Date, waitSeconds: Int)
+    case requestCancelled
+
+    var errorDescription: String? {
+        switch self {
+        case .missingToken:
+            return "GitHub token is missing or not configured"
+        case .networkError(let underlying):
+            if let error = underlying {
+                return "Network error: \(error.localizedDescription)"
+            }
+            return "Network error occurred while connecting to GitHub"
+        case .apiError(let code, let message):
+            if let code = code, let message = message {
+                return "GitHub API error (\(code)): \(message)"
+            } else if let code = code {
+                return "GitHub API error (HTTP \(code))"
+            }
+            return "GitHub API error occurred"
+        case .invalidResponse:
+            return "Received invalid response from GitHub API"
+        case .rateLimitExceeded(let resetDate, let waitSeconds):
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            return "GitHub API rate limit exceeded. Resets at \(formatter.string(from: resetDate)) (in \(waitSeconds)s)"
+        case .requestCancelled:
+            return "Request was cancelled"
+        }
+    }
 }
